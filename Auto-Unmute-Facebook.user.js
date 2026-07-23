@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         Facebook Auto Unmute Reels
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
+// @exclude      https://*.instagram.com/*
 // @description  Automatically unmutes Facebook Reels and videos
 // @author       Grok
 // @match        https://www.facebook.com/*
