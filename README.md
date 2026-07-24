@@ -5,8 +5,10 @@ A Tampermonkey userscript that automatically unmutes Facebook Reels and videos a
 ## Features
 
 - 🔊 **Auto-unmutes** Reels by clicking Facebook's unmute button and directly setting `video.muted = false`
-- 🔄 **Resets playback** to the start each time a muted video is detected
-- ⚡ **Dual trigger** — polls every 0.8 seconds *and* re-runs 500ms after any click on the page
+- 🔄 **One-time reset** — rewinds each video to the start only once using a `Set`, so mid-video playback is never interrupted
+- 🧹 **Automatic memory cleanup** — stale video IDs are pruned from the tracking Set when videos leave the DOM
+- 🎯 **Reliable visibility check** — uses `getBoundingClientRect()` instead of `offsetParent` to correctly handle `position: fixed` elements
+- ⚡ **Dual trigger** — polls every 1.2 seconds and re-runs 500ms after any page click
 - 🚫 **Excludes Instagram** — explicitly skipped via `@exclude` so it doesn't conflict with the Instagram script
 
 ## Installation
@@ -23,18 +25,25 @@ A Tampermonkey userscript that automatically unmutes Facebook Reels and videos a
 
 ## How It Works
 
-The script triggers on a 0.8-second interval and also on every page click (with a 500ms delay to let Facebook's player react). Each trigger:
+The script triggers on a 1.2-second interval and also on every page click (with a 500ms delay). Each trigger:
 
-1. **Clicks any visible unmute button** — queries `div[aria-label="Unmute"][role="button"]` and the broader `[aria-label="Unmute"]` to cover Facebook's varying DOM structure, only clicking elements where `offsetParent !== null`
-2. **Directly unmutes video elements** — iterates all `<video>` tags, and for any that are muted sets `muted = false` and resets `currentTime` to `0`
-
-> **Note:** Unlike the Instagram script, the Facebook version resets `currentTime` on *every* unmute detection rather than tracking which videos have already been reset. This is intentional — Facebook's Reels player replaces video `src` frequently enough that per-video tracking isn't needed.
+1. **Clicks any visible unmute button** — queries `div[aria-label="Unmute"][role="button"]` and the broader `[aria-label="Unmute"]`, only acting on visible elements via `getBoundingClientRect()`
+2. **Stamps each video with a stable ID** — uses `dataset.unmuterId` (set to `video.src` or a unique fallback) so IDs don't shift when the DOM changes
+3. **Unmutes and resets once per video** — sets `muted = false` every poll, but only rewinds `currentTime` to `0` the first time a video is seen
+4. **Prunes the tracking Set** — after each poll, removes IDs for videos no longer present in the DOM to prevent memory leaks
 
 ## Changelog
 
+**v2.0**
+- Added `resetDone` Set so videos are only rewound once — fixes repeated interruptions mid-playback
+- Replaced `offsetParent` visibility check with `getBoundingClientRect()` for accuracy with `position: fixed` elements
+- Added stable `dataset.unmuterId` stamping — fixes unreliable index-based video IDs
+- Added DOM pruning to clean up stale IDs from the tracking Set
+- Slowed interval from 0.8s to 1.2s — click listener covers fast response cases
+
 **v1.1**
-- Added `document` click listener as a secondary trigger for faster response when navigating between Reels
-- Tightened unmute button selector to prefer `div[role="button"]` while keeping the broad fallback
+- Added `document` click listener as a secondary trigger
+- Tightened unmute button selector with `role="button"` while keeping broad fallback
 
 ## Contributing
 
