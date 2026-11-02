@@ -1,26 +1,31 @@
 // ==UserScript==
 // @name         Facebook Auto Unmute Reels
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Automatically unmutes Facebook Reels and videos
-// @author       Grok
-// @match        https://www.facebook.com/*
+// @version      2.2
+// @description  Automatically unmutes the Facebook Reels and videos you are watching
+// @author       poorloading
 // @match        https://*.facebook.com/*
-// @exclude      https://*.instagram.com/*
 // @grant        none
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/poorloading/facebook-auto-unmute/main/Auto-Unmute-Facebook.user.js
+// @downloadURL  https://raw.githubusercontent.com/poorloading/facebook-auto-unmute/main/Auto-Unmute-Facebook.user.js
 // ==/UserScript==
 (function () {
     'use strict';
 
-    const DEBUG = true;
-    const POLL_MS = 1200;            // safety-net cadence (matches Instagram script)
-    const CLICK_DELAY_MS = 500;      // let player state settle after a click
-    const MUTATION_DELAY_MS = 200;   // coalesce bursts of DOM churn into one run
+    const DEBUG = false;                 // console logging on/off
+    const POLL_MS = 1200;                // safety-net cadence (matches Instagram script)
+    const CLICK_DELAY_MS = 500;          // let player state settle after a click
+    const MUTATION_DELAY_MS = 200;       // coalesce bursts of DOM churn into one run
+    const ACTIVE_VIDEO_MIN_RATIO = 0.6;  // on-screen fraction needed to silence the others
+    const UNMUTE_LABELS = ['Unmute'];    // add your UI language's label(s) here
 
     const log = (...args) => { if (DEBUG) console.log('[auto-unmute]', ...args); };
 
-    log('v2.1 started');
+    log('v2.2 started');
+
+    // One selector built from every localized label we know about.
+    const UNMUTE_SELECTOR = UNMUTE_LABELS.map(label => `[aria-label="${label}"]`).join(', ');
 
     // WeakMap keyed on each <video>, storing the src we last rewound to.
     // Keys are garbage-collected automatically when the element leaves the
@@ -36,29 +41,75 @@
         return rect.width > 0 && rect.height > 0;
     }
 
+    // Fraction (0-1) of the element that is currently within the viewport.
+    function visibleRatio(el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return 0;
+
+        const vw = window.innerWidth || document.documentElement.clientWidth;
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+
+        const visibleWidth = Math.min(rect.right, vw) - Math.max(rect.left, 0);
+        const visibleHeight = Math.min(rect.bottom, vh) - Math.max(rect.top, 0);
+        if (visibleWidth <= 0 || visibleHeight <= 0) return 0;
+
+        const totalArea = rect.width * rect.height;
+        return totalArea > 0 ? (visibleWidth * visibleHeight) / totalArea : 0;
+    }
+
     function unmute() {
-        // Click any visible unmute button (selector already covers div+role).
-        for (const btn of document.querySelectorAll('[aria-label="Unmute"]')) {
+        // Click any visible unmute button.
+        for (const btn of document.querySelectorAll(UNMUTE_SELECTOR)) {
             if (isVisible(btn)) {
                 btn.click();
                 log('unmute button clicked');
             }
         }
 
-        // Unmute every video and rewind it to the start once per src.
-        for (const video of document.querySelectorAll('video')) {
-            if (video.muted) {
-                video.muted = false;
-                log('video unmuted');
-            }
+        const videos = Array.from(document.querySelectorAll('video'));
+        if (!videos.length) return;
 
-            // New element, or a reused element whose source changed (e.g.
-            // Facebook swapped in the next Reel) -> rewind once.
-            if (lastResetSrc.get(video) !== video.src) {
-                video.currentTime = 0;
-                lastResetSrc.set(video, video.src);
-                log('video reset to start');
+        // Pick the single most on-screen video: that is the one the user is
+        // actually watching. Without this every preloaded feed preview plays
+        // its audio at once, on top of the reel that was opened.
+        let active = null;
+        let best = 0;
+        for (const video of videos) {
+            const ratio = visibleRatio(video);
+            if (ratio > best) {
+                best = ratio;
+                active = video;
             }
+        }
+
+        for (const video of videos) {
+            if (video === active) {
+                if (video.muted) {
+                    video.muted = false;
+                    log('active video unmuted');
+                }
+
+                // New element, or a reused element whose source changed (e.g.
+                // Facebook swapped in the next Reel) -> rewind once.
+                // currentSrc is the media actually playing; src is empty when
+                // the element loads through <source> children.
+                const src = video.currentSrc || video.src;
+                if (lastResetSrc.get(video) !== src) {
+                    try {
+                        video.currentTime = 0;
+                    } catch (err) {
+                        log('rewind failed', err);
+                    }
+                    lastResetSrc.set(video, src);
+                    log('active video reset to start');
+                }
+            } else if (best >= ACTIVE_VIDEO_MIN_RATIO && !video.muted) {
+                // Something is clearly on screen, so silence everything behind it.
+                video.muted = true;
+                log('inactive video muted');
+            }
+            // Deliberately nothing when no video clears the threshold: leave
+            // the other players alone rather than muting the whole page.
         }
     }
 
@@ -72,11 +123,12 @@
     // React the moment Facebook injects a new <video> or unmute button,
     // instead of waiting up to POLL_MS for the next poll.
     function hasRelevantMutation(records) {
+        const selector = `video, ${UNMUTE_SELECTOR}`;
         for (const { addedNodes } of records) {
             for (const node of addedNodes) {
                 if (node.nodeType !== 1) continue; // elements only
-                if (node.matches('video, [aria-label="Unmute"]')) return true;
-                if (node.querySelector('video, [aria-label="Unmute"]')) return true;
+                if (node.matches(selector)) return true;
+                if (node.querySelector(selector)) return true;
             }
         }
         return false;
