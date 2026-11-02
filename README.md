@@ -192,6 +192,17 @@ elements locally and makes **no network requests** of its own.
 - Added a `document` click listener as a secondary trigger.
 - Tightened the unmute selector with `role="button"` (kept a broad fallback).
 
+## Testing
+
+The core logic runs headlessly against a stubbed DOM, so no browser is needed:
+
+```
+node test/unmute.test.js
+```
+
+It covers active-video selection, the force-mute guard, and rewind-once-per-source
+behaviour. No dependencies — just Node.
+
 ## Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to
