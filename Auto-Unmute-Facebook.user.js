@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Facebook Auto Unmute Reels
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      3.0
 // @description  Automatically unmutes the Facebook Reels and videos you are watching
 // @author       poorloading
 // @match        https://*.facebook.com/*
@@ -14,50 +14,68 @@
     'use strict';
 
     const DEBUG = false;                 // console logging on/off
-    const POLL_MS = 1200;                // safety-net cadence (matches Instagram script)
-    const CLICK_DELAY_MS = 500;          // let player state settle after a click
-    const MUTATION_DELAY_MS = 200;       // coalesce bursts of DOM churn into one run
+    const APPLY_DELAY_MS = 120;          // coalesce bursts of observer callbacks
+    const RESCAN_MS = 5000;              // safety net: find new videos, re-check mute
     const ACTIVE_VIDEO_MIN_RATIO = 0.6;  // on-screen fraction needed to silence the others
     const UNMUTE_LABELS = ['Unmute'];    // add your UI language's label(s) here
 
+    // The points at which the browser reports that a video's on-screen
+    // fraction changed. The decision boundary is included, so we get a
+    // callback exactly when a video crosses it.
+    const RATIO_THRESHOLDS = [0, 0.25, 0.5, ACTIVE_VIDEO_MIN_RATIO, 0.75, 1];
+
     const log = (...args) => { if (DEBUG) console.log('[auto-unmute]', ...args); };
 
-    log('v2.2 started');
+    log('v3.0 started');
 
     // One selector built from every localized label we know about.
     const UNMUTE_SELECTOR = UNMUTE_LABELS.map(label => `[aria-label="${label}"]`).join(', ');
 
-    // WeakMap keyed on each <video>, storing the src we last rewound to.
-    // Keys are garbage-collected automatically when the element leaves the
-    // DOM, so there is nothing to prune — no dataset stamping, no Set cleanup.
+    // element -> the source we last rewound it on. WeakMap keys are collected
+    // with the element, so there is nothing to prune.
     const lastResetSrc = new WeakMap();
+
+    // element -> last on-screen fraction the browser reported for it. This
+    // replaces measuring getBoundingClientRect() ourselves: the observer hands
+    // us the number for free, and only when it actually changes.
+    const ratios = new WeakMap();
+
+    // Videos already handed to the observer, so we never observe one twice.
+    const observed = new WeakSet();
+
+    let haveRatios = false;
+
+    const io = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+            ratios.set(entry.target, entry.isIntersecting ? entry.intersectionRatio : 0);
+            haveRatios = true;
+        }
+        scheduleApply(APPLY_DELAY_MS);
+    }, { threshold: RATIO_THRESHOLDS });
+
+    function observeVideos() {
+        for (const video of document.querySelectorAll('video')) {
+            if (!observed.has(video)) {
+                observed.add(video);
+                io.observe(video);
+            }
+        }
+    }
 
     function isVisible(el) {
         if (typeof el.checkVisibility === 'function') {
             return el.checkVisibility();
         }
         // Fallback for older browsers: a zero-size box means not visible.
+        // Only ever runs on a handful of buttons, never on the video list.
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
     }
 
-    // Fraction (0-1) of the element that is currently within the viewport.
-    function visibleRatio(el) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return 0;
+    function applyMuteState() {
+        // Nothing measured yet: touching mute state now would act on a guess.
+        if (!haveRatios) return;
 
-        const vw = window.innerWidth || document.documentElement.clientWidth;
-        const vh = window.innerHeight || document.documentElement.clientHeight;
-
-        const visibleWidth = Math.min(rect.right, vw) - Math.max(rect.left, 0);
-        const visibleHeight = Math.min(rect.bottom, vh) - Math.max(rect.top, 0);
-        if (visibleWidth <= 0 || visibleHeight <= 0) return 0;
-
-        const totalArea = rect.width * rect.height;
-        return totalArea > 0 ? (visibleWidth * visibleHeight) / totalArea : 0;
-    }
-
-    function unmute() {
         // Click any visible unmute button.
         for (const btn of document.querySelectorAll(UNMUTE_SELECTOR)) {
             if (isVisible(btn)) {
@@ -75,7 +93,7 @@
         let active = null;
         let best = 0;
         for (const video of videos) {
-            const ratio = visibleRatio(video);
+            const ratio = ratios.get(video) || 0;
             if (ratio > best) {
                 best = ratio;
                 active = video;
@@ -113,15 +131,14 @@
         }
     }
 
-    // Shared debounce so clicks, mutations, etc. coalesce into one run.
     let pendingTimer = null;
-    function scheduleUnmute(delay) {
+    function scheduleApply(delay) {
         clearTimeout(pendingTimer);
-        pendingTimer = setTimeout(unmute, delay);
+        pendingTimer = setTimeout(applyMuteState, delay);
     }
 
-    // React the moment Facebook injects a new <video> or unmute button,
-    // instead of waiting up to POLL_MS for the next poll.
+    // New <video> elements need observing, and re-running picks up anything
+    // the observer hasn't reported yet.
     function hasRelevantMutation(records) {
         const selector = `video, ${UNMUTE_SELECTOR}`;
         for (const { addedNodes } of records) {
@@ -136,19 +153,27 @@
 
     if (document.body) {
         new MutationObserver(records => {
-            if (hasRelevantMutation(records)) scheduleUnmute(MUTATION_DELAY_MS);
+            if (!hasRelevantMutation(records)) return;
+            observeVideos();
+            scheduleApply(APPLY_DELAY_MS);
         }).observe(document.body, { childList: true, subtree: true });
     }
 
-    // Safety-net poll for state changes that don't touch the DOM
-    // (e.g. a video re-muting itself).
-    setInterval(unmute, POLL_MS);
+    // Safety net for state that changes without the observer noticing: a video
+    // re-muting itself, or a player swapped in without a DOM insertion we saw.
+    // Cheap, because it reads no layout.
+    setInterval(() => {
+        observeVideos();
+        applyMuteState();
+    }, RESCAN_MS);
 
     // Re-run shortly after clicks to catch player state changes.
-    document.addEventListener('click', () => scheduleUnmute(CLICK_DELAY_MS));
+    document.addEventListener('click', () => scheduleApply(APPLY_DELAY_MS));
 
-    // Kick things off after the page has had a moment to load.
-    scheduleUnmute(1000);
+    // Start observing immediately; the observer's first callback drives the
+    // first unmute, and the delayed run covers anything it missed.
+    observeVideos();
+    scheduleApply(1000);
 
     log('ready');
 })();
