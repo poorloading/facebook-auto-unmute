@@ -1,6 +1,6 @@
 # Facebook Auto Unmute Reels
 
-![version](https://img.shields.io/badge/version-2.2-blue)
+![version](https://img.shields.io/badge/version-3.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![platform](https://img.shields.io/badge/platform-Tampermonkey%20Userscript-orange)
 ![browsers](https://img.shields.io/badge/browsers-Chromium%20%7C%20Firefox-lightgrey)
@@ -23,12 +23,17 @@ this script does the unmuting for you, on every reel, automatically.
 
 - 🔊 **Auto-unmutes** by clicking Facebook's unmute button *and* setting
   `video.muted = false` directly for belt-and-suspenders reliability.
-- ⚡ **Reacts in ~200ms** to newly-injected videos via a `MutationObserver`, so
-  freshly-scrolled reels are handled near-instantly — no waiting on a poll.
+- ⚡ **Reacts on scroll, not on a timer** — an `IntersectionObserver` reports
+  when a video's on-screen fraction changes, so scrolling to a new reel is
+  handled immediately with no polling.
 - 🎬 **One video at a time** — only the most on-screen video is unmuted; every
   other `<video>` (feed previews, preloaded reels) is force-muted, so audio
   never overlaps. If no video clears `ACTIVE_VIDEO_MIN_RATIO`, the other
   players are left alone rather than muting the whole page.
+- 🪶 **No layout thrash on the video list** — the observer supplies each
+  video's on-screen fraction, so the script never calls
+  `getBoundingClientRect()` on a player. On a long feed that removes the
+  repeated forced layout the old polling design caused.
 - 🔄 **Rewinds once per source** — each video is sent back to its start the first
   time it's seen, but never re-interrupted mid-playback. Tracking keys on
   `currentSrc`, so a reused element that switches to the next reel rewinds again.
@@ -71,45 +76,46 @@ All tunables live at the top of the file. Adjust to taste, then save:
 
 ```js
 const DEBUG = false;                 // console logging on/off
-const POLL_MS = 1200;                // safety-net poll interval (ms)
-const CLICK_DELAY_MS = 500;          // delay after a click before re-running (ms)
-const MUTATION_DELAY_MS = 200;       // debounce window for DOM changes (ms)
+const APPLY_DELAY_MS = 120;          // coalesce bursts of observer callbacks (ms)
+const RESCAN_MS = 5000;              // safety-net rescan interval (ms)
 const ACTIVE_VIDEO_MIN_RATIO = 0.6;  // on-screen fraction before others are muted
 const UNMUTE_LABELS = ['Unmute'];    // add your UI language's label(s) here
 ```
 
 | Constant | Lower it to… | Raise it to… |
 |---|---|---|
-| `MUTATION_DELAY_MS` | react faster to new reels | coalesce more churn into one run |
-| `POLL_MS` | catch silent re-mutes sooner | reduce background CPU |
-| `CLICK_DELAY_MS` | respond to clicks faster | give the player more time to settle |
+| `APPLY_DELAY_MS` | react faster to a scroll | coalesce more churn into one run |
+| `RESCAN_MS` | catch silent re-mutes sooner | reduce background CPU |
 | `ACTIVE_VIDEO_MIN_RATIO` | silence other players more eagerly | leave more videos unmuted in a feed |
 
 If Reels stay muted on a small window, lower `ACTIVE_VIDEO_MIN_RATIO`. If audio
 from an off-screen video still creeps in, raise it.
 
 **Don't want the auto-rewind?** Delete (or comment out) the `video.currentTime =
-0;` block inside `unmute()`. Unmuting will still work; videos just won't snap
-back to the start.
+0;` block inside `applyMuteState()`. Unmuting will still work; videos just won't
+snap back to the start.
 
 ## How it works
 
-Three independent triggers all funnel through a single debounced `unmute()` run:
+One `IntersectionObserver` watches every `<video>`, plus two cheap triggers
+that all funnel through a single debounced `applyMuteState()` run:
 
-1. **`MutationObserver`** — watches `document.body` for newly-added nodes. When a
-   new `<video>` or unmute button appears, `unmute` is scheduled ~200ms later
-   (debounced so bursts of DOM changes fire it once).
-2. **Click listener** — any page click schedules `unmute` after 500ms, catching
-   player state changes that follow a user interaction.
-3. **Polling fallback** — every 1.2s, to catch state changes that touch no DOM
-   (e.g. a video silently re-muting itself).
+1. **`IntersectionObserver`** — the browser reports a video's on-screen
+   fraction whenever it crosses one of `RATIO_THRESHOLDS`, with no measurement
+   on our side. That is what drives unmuting while you scroll.
+2. **`MutationObserver`** — watches `document.body` for new `<video>` and
+   unmute-button nodes. New players get handed to the observer, then a run is
+   scheduled.
+3. **Safety-net rescan** — every `RESCAN_MS`, to catch state changes that touch
+   no DOM (e.g. a video silently re-muting itself), and to pick up any player
+   the mutation observer missed.
 
-Each `unmute()` run:
+Each `applyMuteState()` run:
 
 1. Finds every unmute button matching `UNMUTE_LABELS` and `.click()`s the
    visible ones.
-2. Scores every `<video>` by the fraction of its area that is on screen and
-   picks the highest one as the active video.
+2. Picks the `<video>` with the highest on-screen fraction the observer has
+   reported, and treats that as the active video.
 3. Unmutes the active video — the only one allowed to play audio.
 4. Force-mutes the other videos, but only when the active video is at least
    `ACTIVE_VIDEO_MIN_RATIO` on screen. Otherwise the other players are left
@@ -131,7 +137,8 @@ dashboard and that you're on a `facebook.com` URL (it only matches
 `*.facebook.com`). `@run-at` is `document-idle`, so give the page a moment
 after load.
 
-**The console is noisy.** Set `DEBUG = false` at the top of the script.
+**The console is noisy.** It shouldn't be: `DEBUG` is `false` by default. Set it
+to `true` only while diagnosing something.
 
 **It's unmuting the wrong thing.** It shouldn't anymore: only the most
 on-screen video is unmuted and the rest are muted. If a background player still
@@ -154,6 +161,21 @@ The script runs entirely in your browser. It reads and modifies Facebook's page
 elements locally and makes **no network requests** of its own.
 
 ## Changelog
+
+**v3.0** — observer-driven, no polling
+- Replaced the 1.2s poll with an `IntersectionObserver`. The browser reports
+  each video's on-screen fraction when it crosses a threshold, so the script no
+  longer calls `getBoundingClientRect()` on any player — the repeated forced
+  layout on a long feed is gone.
+- The poll survives only as a `RESCAN_MS` (5s) safety net for state changes
+  that touch no DOM, such as a video re-muting itself.
+- New videos are handed to the observer from the `MutationObserver`, and
+  `RATIO_THRESHOLDS` includes `ACTIVE_VIDEO_MIN_RATIO` so a callback fires
+  exactly at the decision boundary.
+- Nothing is unmuted or muted until the observer has reported a ratio, so the
+  script no longer acts on a guess at startup.
+- `POLL_MS`, `CLICK_DELAY_MS` and `MUTATION_DELAY_MS` are gone, replaced by
+  `APPLY_DELAY_MS` and `RESCAN_MS`.
 
 **v2.2** — no more overlapping audio
 - Only the most on-screen video is unmuted; every other `<video>` is force-muted,
