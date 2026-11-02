@@ -1,74 +1,96 @@
 # Facebook Auto Unmute Reels
 
-![version](https://img.shields.io/badge/version-3.0-blue)
-![license](https://img.shields.io/badge/license-MIT-green)
-![platform](https://img.shields.io/badge/platform-Tampermonkey%20Userscript-orange)
-![browsers](https://img.shields.io/badge/browsers-Chromium%20%7C%20Firefox-lightgrey)
+[![license](https://img.shields.io/github/license/poorloading/facebook-auto-unmute)](LICENSE)
+[![last commit](https://img.shields.io/github/last-commit/poorloading/facebook-auto-unmute)](https://github.com/poorloading/facebook-auto-unmute/commits/main)
+[![Tampermonkey](https://img.shields.io/badge/userscript-Tampermonkey-orange)](Auto-Unmute-Facebook.user.js)
 
-A lightweight Tampermonkey userscript that automatically unmutes the Facebook
-Reel or video you're actually watching — no more tapping the speaker icon on
-every clip. It clicks Facebook's own unmute button *and* sets `video.muted =
-false` directly, so playback starts with sound regardless of how the player
-loaded, while everything scrolled off-screen stays silent.
+A Tampermonkey userscript that unmutes Facebook Reels and videos automatically.
+Facebook ships Reels muted to satisfy browser autoplay policies, and re-mutes the
+next one when you scroll — this script turns the sound back on for the video
+you're actually watching, so you stop tapping the speaker icon on every clip.
+
+Everything scrolled off-screen stays silent, so a feed full of previews can't
+talk over the reel you opened.
+
+> **Also available for Instagram:** [instagram-auto-unmute](https://github.com/poorloading/instagram-auto-unmute)
 
 ---
 
-## Why?
+## Table of contents
 
-Facebook ships Reels muted by default to satisfy browser autoplay policies, and
-re-mutes the next reel when you scroll. If you'd rather just hear everything,
-this script does the unmuting for you, on every reel, automatically.
+- [Features](#features)
+- [Installation](#installation)
+- [Requirements](#requirements)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [How it works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
+- [Known limitations](#known-limitations)
+- [Privacy](#privacy)
+- [Testing](#testing)
+- [Changelog](#changelog)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
-- 🔊 **Auto-unmutes** by clicking Facebook's unmute button *and* setting
-  `video.muted = false` directly for belt-and-suspenders reliability.
-- ⚡ **Reacts on scroll, not on a timer** — an `IntersectionObserver` reports
-  when a video's on-screen fraction changes, so scrolling to a new reel is
-  handled immediately with no polling.
-- 🎬 **One video at a time** — only the most on-screen video is unmuted; every
-  other `<video>` (feed previews, preloaded reels) is force-muted, so audio
-  never overlaps. If no video clears `ACTIVE_VIDEO_MIN_RATIO`, the other
-  players are left alone rather than muting the whole page.
-- 🪶 **No layout thrash on the video list** — the observer supplies each
-  video's on-screen fraction, so the script never calls
-  `getBoundingClientRect()` on a player. On a long feed that removes the
-  repeated forced layout the old polling design caused.
-- 🔄 **Rewinds once per source** — each video is sent back to its start the first
-  time it's seen, but never re-interrupted mid-playback. Tracking keys on
-  `currentSrc`, so a reused element that switches to the next reel rewinds again.
-- 🧹 **Zero-leak tracking** — state lives in a `WeakMap` keyed on each `<video>`,
-  so it's garbage-collected automatically. No DOM mutation, no manual cleanup.
-- 🎯 **Accurate visibility checks** — uses `Element.checkVisibility()` (with a
-  `getBoundingClientRect()` fallback) so hidden buttons are never misclicked.
-- 🌍 **Localized labels** — add your UI language's unmute label to
-  `UNMUTE_LABELS` if `aria-label="Unmute"` doesn't exist in your locale.
+- 🔊 **Sound on, automatically.** Clicks Facebook's own unmute button *and* sets
+  `video.muted = false` directly, so it works even when the button hasn't
+  rendered yet.
+- 🎬 **Only one video at a time.** Just the video you're watching gets audio;
+  feed previews and preloaded reels are muted, so you never get two reels
+  playing over each other.
+- 🔄 **Doesn't restart what you're watching.** A reel you're halfway through
+  keeps playing. Only a genuinely new video is rewound to the start.
+- 🧩 **Leaves the page alone.** It reads and toggles a `muted` attribute, nothing
+  more — no injected UI, no changes to Facebook's own elements.
+- 🌍 **Works in your language.** Unmute button labels are configurable, so a
+  non-English Facebook UI can be supported.
 
 ## Installation
 
-1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension
-   (v4.0 or later).
-2. Open Tampermonkey → **Dashboard** → click the **+** tab to create a new script.
-3. Delete the starter template, then paste in the contents of
+### Option A — one-click (recommended)
+
+1. Install a userscript manager: [Tampermonkey](https://www.tampermonkey.net/)
+   or [Violentmonkey](https://violentmonkey.github.io/).
+2. Open the raw script and your manager will offer to install it:
+   **[Install Auto-Unmute-Facebook.user.js](https://raw.githubusercontent.com/poorloading/facebook-auto-unmute/main/Auto-Unmute-Facebook.user.js)**
+3. Confirm the install, then open [facebook.com](https://www.facebook.com) — it
+   runs automatically.
+
+Because the script declares `@updateURL` / `@downloadURL`, your manager will
+check this repository for updates on its own.
+
+### Option B — manual
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/) or
+   [Violentmonkey](https://violentmonkey.github.io/).
+2. Open the extension → **Dashboard** → **+** (create a new script).
+3. Replace the template with the contents of
    [`Auto-Unmute-Facebook.user.js`](Auto-Unmute-Facebook.user.js).
-4. Save (`Ctrl`/`Cmd` + `S`) and open [facebook.com](https://www.facebook.com).
-   That's it — Reels will now play with sound.
+4. Save (`Ctrl`/`Cmd` + `S`) and reload Facebook.
 
-Because the script declares `@updateURL` / `@downloadURL`, your manager checks
-this repository for updates on its own, so fixes reach you without reinstalling.
+> **Note:** manual installs are not auto-updated unless you keep the
+> `@updateURL` header intact.
 
-> **Tip:** You can also install straight from the raw file — open
-> [`Auto-Unmute-Facebook.user.js`](https://raw.githubusercontent.com/poorloading/facebook-auto-unmute/main/Auto-Unmute-Facebook.user.js)
-> and Tampermonkey will offer to install it.
+## Requirements
+
+- A Chromium-based browser (Chrome, Edge, Brave, Opera) or Firefox
+- [Tampermonkey](https://www.tampermonkey.net/) v4.0+ or
+  [Violentmonkey](https://violentmonkey.github.io/) v2.12+
+- Runs on `https://*.facebook.com/*`; no special `@grant` permissions are
+  requested
+
+`Element.checkVisibility()` is used where available (Chrome 105+, Firefox 113+,
+Safari 16.4+); older browsers fall back to a box-size check.
 
 ## Usage
 
-Once installed it runs automatically — there's nothing to click. Console
-logging is off by default; set `DEBUG = true` at the top of the script to see
-lines prefixed `[auto-unmute]` for each action it takes.
+Once installed it runs automatically — there's nothing to click.
 
-The script activates on any `facebook.com` page and watches for `<video>`
-elements and unmute buttons appearing anywhere in the document.
+If you want to watch it work, set `DEBUG = true` at the top of the script and
+open DevTools → Console. It's off by default; every action is logged with an
+`[auto-unmute]` prefix when enabled.
 
 ## Configuration
 
@@ -100,9 +122,9 @@ snap back to the start.
 One `IntersectionObserver` watches every `<video>`, plus two cheap triggers
 that all funnel through a single debounced `applyMuteState()` run:
 
-1. **`IntersectionObserver`** — the browser reports a video's on-screen
-   fraction whenever it crosses one of `RATIO_THRESHOLDS`, with no measurement
-   on our side. That is what drives unmuting while you scroll.
+1. **`IntersectionObserver`** — the browser reports a video's on-screen fraction
+   whenever it crosses one of `RATIO_THRESHOLDS`, with no measurement on our
+   side. That is what drives unmuting while you scroll.
 2. **`MutationObserver`** — watches `document.body` for new `<video>` and
    unmute-button nodes. New players get handed to the observer, then a run is
    scheduled.
@@ -125,40 +147,55 @@ Each `applyMuteState()` run:
    next reel), and records that source in the `WeakMap`, so it's cleaned up
    automatically when the element leaves the DOM.
 
+Under the hood, in case you're auditing it:
+
+- No video is ever measured with `getBoundingClientRect()`; the observer
+  supplies the ratio, so there's no repeated forced layout on a long feed.
+- Rewind state lives in a `WeakMap` keyed on each `<video>`, garbage-collected
+  with the element. No DOM stamping, no manual cleanup.
+- Nothing is muted or unmuted until the observer has reported at least one
+  ratio, so the script never acts on a guess at startup.
+- The script makes no network requests of its own.
+
 ## Troubleshooting
 
-**A reel stays muted.** Browsers' autoplay policies can block a script-set
-`muted = false` when there's no recent user gesture. The button click usually
-still works; if not, click anywhere on the page once and the click-triggered run
-will retry. Check the console for `[auto-unmute]` lines to confirm it's firing.
+| Symptom | Fix |
+| --- | --- |
+| Nothing happens | Confirm the script is enabled in your manager's dashboard and the page is a `facebook.com` URL, then hard-reload (`Ctrl`/`Cmd` + `Shift` + `R`). |
+| A reel stays muted | Browsers block a script-set `muted = false` without a recent user gesture. Click once anywhere on the page and the next run retries. |
+| Audio from two videos at once | Shouldn't happen; if it does, raise `ACTIVE_VIDEO_MIN_RATIO`. |
+| The unmute button never gets clicked | `aria-label="Unmute"` is the English label and Facebook localizes it (e.g. `Activer le son`). Add yours to `UNMUTE_LABELS` — the direct `muted = false` path still works without it. |
+| Want to see what it's doing | Set `DEBUG = true` and open DevTools → Console. |
 
-**Nothing happens at all.** Confirm the script is enabled in the Tampermonkey
-dashboard and that you're on a `facebook.com` URL (it only matches
-`*.facebook.com`). `@run-at` is `document-idle`, so give the page a moment
-after load.
+## Known limitations
 
-**The console is noisy.** It shouldn't be: `DEBUG` is `false` by default. Set it
-to `true` only while diagnosing something.
-
-**It's unmuting the wrong thing.** It shouldn't anymore: only the most
-on-screen video is unmuted and the rest are muted. If a background player still
-audibly bleeds through, raise `ACTIVE_VIDEO_MIN_RATIO`.
-
-**The unmute button never gets clicked.** `aria-label="Unmute"` is the English
-UI label, and Facebook localizes it (e.g. `Activer le son` in French). Add your
-locale's label to `UNMUTE_LABELS`. The direct `video.muted = false` path still
-works without it, so reels should still get sound.
-
-## Browser support
-
-Tested on current Chromium-based browsers and Firefox. `Element.checkVisibility()`
-is used where available (Chrome 105+, Firefox 113+, Safari 16.4+); older
-browsers fall back to a `getBoundingClientRect()` box-size check.
+- **Desktop web only.** Mobile apps can't run userscripts, and neither can the
+  Messenger desktop app.
+- **One video at a time.** A clip that is mostly off-screen won't be unmuted,
+  by design. Lower `ACTIVE_VIDEO_MIN_RATIO` if that's too strict for your window
+  size.
+- **Autoplay policies still apply.** Chrome and Firefox may require one
+  interaction with the page per session before sound is allowed at all. The
+  script can't override that.
+- **Facebook's markup changes.** Button labels are localized and renamed
+  occasionally. When that happens, add the new label to `UNMUTE_LABELS`.
 
 ## Privacy
 
 The script runs entirely in your browser. It reads and modifies Facebook's page
 elements locally and makes **no network requests** of its own.
+
+## Testing
+
+The core logic runs headlessly against a stubbed DOM, so no browser is needed:
+
+```
+node test/unmute.test.js
+```
+
+It covers active-video selection, the force-mute guard, rewind-once-per-source,
+and asserts that no video is ever measured for layout. No dependencies — just
+Node.
 
 ## Changelog
 
@@ -214,22 +251,12 @@ elements locally and makes **no network requests** of its own.
 - Added a `document` click listener as a secondary trigger.
 - Tightened the unmute selector with `role="button"` (kept a broad fallback).
 
-## Testing
-
-The core logic runs headlessly against a stubbed DOM, so no browser is needed:
-
-```
-node test/unmute.test.js
-```
-
-It covers active-video selection, the force-mute guard, and rewind-once-per-source
-behaviour. No dependencies — just Node.
-
 ## Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to
-discuss what you'd like to change.
+discuss what you'd like to change. When reporting a bug, include your browser,
+userscript manager, script version, and any `DEBUG = true` console output.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © poorloading
